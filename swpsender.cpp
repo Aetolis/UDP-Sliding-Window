@@ -1,5 +1,5 @@
 // Sliding Window Protocol
-#include <Shared.h>
+#include <swp.h>
 
 #include <stdio.h>
 #include <stdlib.h>
