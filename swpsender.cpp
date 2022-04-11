@@ -1,6 +1,5 @@
 // Sliding Window Protocol
 #include <swp.h>
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <poll.h>
@@ -11,8 +10,9 @@
 using namespace std;
 
 
-class SWPSender {
+class SWPSender { //why are you not using cammel case my dude?
     public:
+        //public methods
         int connect(char *hostname);
         int send_file(char *filename);
 
@@ -22,12 +22,12 @@ class SWPSender {
         int status;
         int numbytes;
         struct addrinfo hints, *addr_ptr;
-        struct pollfd pfds[2];
+        struct pollfd pfds[2]; //data structure describing a polling request
 
         // SWP variables
-        int LAR;
-        int LFS;
-        int windowSize;
+        int LAR; //last ack recived
+        int LFS; //last frame sent
+        int windowSize; 
 
         // Buffer variables
 
@@ -76,11 +76,11 @@ int SWPSender::connect(char *hostname) {
     freeaddrinfo(client_info);
 
     // Establish virtual connection
-    char con_buf[8];
+    char con_buf[8]; //8 bytes bc sequnum is 4, ack is 1, control is 1, and length is 2
 
     // Set initial sequence number
     uint32_t seq_num = htonl((uint32_t)INIT_SEQ_NUM);
-    memcpy(con_buf, &seq_num, sizeof(uint32_t));
+    memcpy(con_buf, &seq_num, sizeof(uint32_t)); //don't we need to be careful of using size of ?
 
     // Set ACK flag as 0
     con_buf[4] = 0x00;
@@ -98,7 +98,7 @@ int SWPSender::connect(char *hostname) {
     fprintf(stdout, "[Sender] Establishing connection with receiver...\n");
 
     // Retry connection a set number of times
-    for (int i = 0; i < MAX_RETRY; i++) {
+    for (int i = 0; i < MAX_RETRY; i++) { //should we set some wait time before retrying?
         if (sendto(sockfd, con_buf, 8, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1) {
             fprintf(stderr, "[Sender] Connection attempt #%d: failed to send initial connection request\n", i);
             continue;
@@ -137,6 +137,7 @@ int SWPSender::connect(char *hostname) {
             }
 
             // Check if length is valid
+            //if ((recv_buf[6] > 0x01 && recv_buf[7] != 0x00)|| recv_buf[6] != 0x00 || recv_buf[7] != 0x00) {
             if (recv_buf[6] != 0x00 || recv_buf[7] != 0x00) {
                 fprintf(stderr, "[Sender] Connection attempt #%d: invalid length\n", i);
                 continue;
