@@ -2,6 +2,7 @@
 #include <swp.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <poll.h>
 #include <string.h>
 #include <netdb.h>
@@ -9,16 +10,23 @@
 
 using namespace std;
 
+struct packet {
+    uint32_t seq_num;
+    bool ack_status;
+    uint32_t data_len;
+    // timer
+    char data[MAX_DATA_SIZE];
+};
+
 
 class SWPSender { //why are you not using cammel case my dude?
     public:
-        //public methods
         int connect(char *hostname);
         int send_file(char *filename);
 
     private:
         // UDP variables
-        int sockfd;
+        int sock_fd;
         int status;
         int numbytes;
         struct addrinfo hints, *addr_ptr;
@@ -30,6 +38,9 @@ class SWPSender { //why are you not using cammel case my dude?
         int windowSize; 
 
         // Buffer variables
+        char *send_buf[WINDOW_SIZE];
+
+        // Helper functions
 
 
 
@@ -54,8 +65,8 @@ int SWPSender::connect(char *hostname) {
     // loop through all the results and make a socket
     for (addr_ptr = client_info; addr_ptr != NULL; addr_ptr = addr_ptr->ai_next)
     {
-        sockfd = socket(addr_ptr->ai_family, addr_ptr->ai_socktype, addr_ptr->ai_protocol);
-        if (sockfd != -1)
+        sock_fd = socket(addr_ptr->ai_family, addr_ptr->ai_socktype, addr_ptr->ai_protocol);
+        if (sock_fd != -1)
         {
             break;
         }
@@ -70,7 +81,7 @@ int SWPSender::connect(char *hostname) {
     // setup poll
     pfds[0].fd = 0;
     pfds[0].events = POLLIN;
-    pfds[1].fd = sockfd;
+    pfds[1].fd = sock_fd;
     pfds[1].events = POLLIN;
 
     freeaddrinfo(client_info);
@@ -99,7 +110,7 @@ int SWPSender::connect(char *hostname) {
 
     // Retry connection a set number of times
     for (int i = 0; i < MAX_RETRY; i++) { //should we set some wait time before retrying?
-        if (sendto(sockfd, con_buf, 8, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1) {
+        if (sendto(sock_fd, con_buf, 8, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1) {
             fprintf(stderr, "[Sender] Connection attempt #%d: failed to send initial connection request\n", i);
             continue;
         }
@@ -111,7 +122,7 @@ int SWPSender::connect(char *hostname) {
         }
 
         if (pfds[1].revents & POLLIN) {
-            if (recvfrom(sockfd, recv_buf, 8, 0, NULL, 0) == -1) {
+            if (recvfrom(sock_fd, recv_buf, 8, 0, NULL, 0) == -1) {
                 fprintf(stderr, "[Sender] Connection attempt #%d: failed to recieve initial connection response\n", i);
                 continue;
             }
@@ -153,8 +164,36 @@ int SWPSender::connect(char *hostname) {
         fprintf(stderr, "[Sender] failed to establish connection\n");
         exit(1);
     } else {
-        fprintf(stdout, "[Sender] connection established!\n");
+        char server_ip[INET6_ADDRSTRLEN];
+        // get server IP address
+        if (inet_ntop(addr_ptr->ai_family, &((struct sockaddr_in *)addr_ptr->ai_addr)->sin_addr, server_ip, INET6_ADDRSTRLEN) == NULL)
+        {
+            perror("[Client] inet_ntop");
+            exit(1);
+        }
+        fprintf(stdout, "[Sender] connection established with %s!\n", server_ip);
     }
+}
+
+int SWPSender::send_file(char *filename) {
+    // Check file exists
+    if (access(filename, F_OK) == -1) {
+        fprintf(stderr, "[Sender] file %s does not exist\n", filename);
+        exit(1);
+    }
+
+    // Open file
+    FILE *fp = fopen(filename, "r");
+    if (fp == NULL) {
+        fprintf(stderr, "[Sender] failed to open file %s\n", filename);
+        exit(1);
+    }
+
+    // Get file size
+    fseek(fp, 0, SEEK_END);
+    int file_size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
 }
 
 int main() {
