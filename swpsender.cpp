@@ -1,4 +1,4 @@
-// Sliding Window Protocol
+// Sliding Window Protocol sender
 #include <swp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,16 +13,17 @@ using namespace std;
 struct packet {
     uint32_t seq_num;
     bool ack_status;
-    uint32_t data_len;
+    uint16_t data_len;
     // timer
     char data[MAX_DATA_SIZE];
 };
 
 
-class SWPSender { //why are you not using cammel case my dude?
+class SWPSender{ 
     public:
         int connect(char *hostname);
         int send_file(char *filename);
+        int disconnect();
 
     private:
         // UDP variables
@@ -79,7 +80,7 @@ int SWPSender::connect(char *hostname) {
     }
 
     // setup poll
-    pfds[0].fd = 0;
+    pfds[0].fd = 0; //this is being changed to another fd
     pfds[0].events = POLLIN;
     pfds[1].fd = sock_fd;
     pfds[1].events = POLLIN;
@@ -91,7 +92,7 @@ int SWPSender::connect(char *hostname) {
 
     // Set initial sequence number
     uint32_t seq_num = htonl((uint32_t)INIT_SEQ_NUM);
-    memcpy(con_buf, &seq_num, sizeof(uint32_t)); //don't we need to be careful of using size of ?
+    memcpy(con_buf, &seq_num, sizeof(uint32_t)); 
 
     // Set ACK flag as 0
     con_buf[4] = 0x00;
@@ -109,8 +110,8 @@ int SWPSender::connect(char *hostname) {
     fprintf(stdout, "[Sender] Establishing connection with receiver...\n");
 
     // Retry connection a set number of times
-    for (int i = 0; i < MAX_RETRY; i++) { //should we set some wait time before retrying?
-        if (sendto(sock_fd, con_buf, 8, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1) {
+    for (int i = 0; i < MAX_RETRY; i++) { 
+        if (sendto(sockfd, con_buf, 8, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1) {
             fprintf(stderr, "[Sender] Connection attempt #%d: failed to send initial connection request\n", i);
             continue;
         }
@@ -148,7 +149,7 @@ int SWPSender::connect(char *hostname) {
             }
 
             // Check if length is valid
-            //if ((recv_buf[6] > 0x01 && recv_buf[7] != 0x00)|| recv_buf[6] != 0x00 || recv_buf[7] != 0x00) {
+            //if ((recv_buf[6] > 0x01 && recv_buf[7]  0x00)|| recv_buf[6] != 0x00 || recv_buf[7] != 0x00) {
             if (recv_buf[6] != 0x00 || recv_buf[7] != 0x00) {
                 fprintf(stderr, "[Sender] Connection attempt #%d: invalid length\n", i);
                 continue;
@@ -176,6 +177,7 @@ int SWPSender::connect(char *hostname) {
 }
 
 int SWPSender::send_file(char *filename) {
+
     // Check file exists
     if (access(filename, F_OK) == -1) {
         fprintf(stderr, "[Sender] file %s does not exist\n", filename);
@@ -194,7 +196,30 @@ int SWPSender::send_file(char *filename) {
     int file_size = ftell(fp);
     fseek(fp, 0, SEEK_SET);
 
-}
+    //initilize buffer / turn file into an array of structs
+    //while loop until file ends
+
+
+
+    //begin sending, but also we need to check ttl as we are sending 
+
+    //do we need to tell reciver that we are done sending
+
+
+}//end_send file
+
+
+int SWPSender::disconnect(char *filename) {
+
+    //same code as connect, but we are just sending diffrent info
+
+}//end of disconnect
+
+
+
+
+
+
 
 int main() {
 
