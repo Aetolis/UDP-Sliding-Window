@@ -10,7 +10,7 @@
 
 using namespace std;
 
-class SWPReceiver { //why are you not using cammel case my dude?
+class SWPReceiver {
     public:
         //public methods
         int wait_for_connection();
@@ -23,7 +23,7 @@ class SWPReceiver { //why are you not using cammel case my dude?
         int status;
         int numbytes;
         struct addrinfo hints, *addr_ptr;
-        struct pollfd pfds[2]; //data structure describing a polling request
+        struct pollfd pfds[1]; //data structure describing a polling request
 
         // SWP variables
         int LAF; //largest acceptable frame
@@ -33,27 +33,14 @@ class SWPReceiver { //why are you not using cammel case my dude?
 
         // Buffer variables
 
-
-
 };
 
-//I dont think I need this struct but I will see as I go
-
-//go in and trim values that you do not need
-#define MYPORT "4950" // the port users will be connecting to
-#define MAXBUFLEN 10000 //should this value be changed from 10000 given that we are just using one client
-//#define MAXCLIENTS 2
-//#define BACKLOG 10
 struct Client
 {
-    char username[MAXBUFLEN];
     struct sockaddr_storage client_addr;
     socklen_t addr_len;
     char client_ip_string[INET6_ADDRSTRLEN];
 };
-
-
-
 
 
 int SWPReceiver::wait_for_connection(){
@@ -75,7 +62,7 @@ int SWPReceiver::wait_for_connection(){
     hints.ai_flags = AI_PASSIVE;
 
     // it is NULL because we don't need to manually put in host name
-    if ((status = getaddrinfo(NULL, MYPORT, &hints, &server_info)) != 0)
+    if ((status = getaddrinfo(NULL, UDP_PORT, &hints, &server_info)) != 0)
     {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(status));
         exit(1);
@@ -93,7 +80,7 @@ int SWPReceiver::wait_for_connection(){
         {
             break;
         }
-    }//end of create a socket
+    }//end of create socket
 
     if (ptr == NULL)//check to see if bind was successful 
     {
@@ -109,49 +96,73 @@ int SWPReceiver::wait_for_connection(){
         exit(3);
     }
     printf("[receiver] waiting for connections on %s...\n", s);
-    fprintf(fp, "[receiver] waiting for connections on %s...\n", s);
 
     freeaddrinfo(server_info);
 
     //This is where the code gets weird compared to the last project
 
+    // receive the connection setup packet from sender
     client.addr_len = sizeof client.client_addr;
-        if ((numbytes = recvfrom(sockfd, client.username, MAXBUFLEN - 1, 0, (struct sockaddr *)&client.client_addr, &client.addr_len)) == -1)
-        {
-            perror("[receiver] recvfrom");
-            exit(1);
+    char recv_buf[8];
+    if ((numbytes = recvfrom(sockfd, recv_buf, 8, 0, (struct sockaddr *)&client.client_addr, &client.addr_len)) == -1)
+    {
+        perror("[receiver] recvfrom");
+        exit(1);
+    }
+
+    // This needs to be cleaned up
+    // Wait for response
+    if (poll(pfds, 1, 1000) == -1) {
+        fprintf(stderr, "[Sender] Connection attempt #%d: failed to poll\n", i);
+        continue;
+    }
+
+    if (pfds[0].revents & POLLIN) {
+        if (recvfrom(sock_fd, recv_buf, 8, 0, NULL, 0) == -1) {
+            fprintf(stderr, "[Sender] Connection attempt #%d: failed to recieve initial connection response\n", i);
+            continue;
         }
-        client.username[numbytes] = '\0'; // add null terminator for printing
 
-        // convert client's address to a string
-        if (inet_ntop(client.client_addr.ss_family, &(((struct sockaddr_in *)&client.client_addr)->sin_addr), client.client_ip_string, INET6_ADDRSTRLEN) == NULL)
-        {
-            perror("[receiver] inet_ntop");
-            exit(3);
+        // Check if initial sequence number is correct
+        uint32_t recv_seq_num;
+        memcpy(&recv_seq_num, recv_buf, sizeof(uint32_t));
+        if (ntohl(recv_seq_num) != INIT_SEQ_NUM) {
+            fprintf(stderr, "[Sender] Connection attempt #%d: invalid initial sequence number\n", i);
+            continue;
         }
-        printf("[receiver] client (%s) \"%s\" has successfully connected...\n", client.client_ip_string, client.username);
+
+        // Check if ACK flag is set
+        if (recv_buf[4] != 0x01) {
+            fprintf(stderr, "[Sender] Connection attempt #%d: ACK flag not set\n", i);
+            continue;
+        }
+
+        // Check if connection setup flag is valid
+        if (recv_buf[5] != 0x01) {
+            fprintf(stderr, "[Sender] Connection attempt #%d: connection setup flag not valid\n", i);
+            continue;
+        }
+
+        // Check if length is valid
+        //if ((recv_buf[6] > 0x01 && recv_buf[7]  0x00)|| recv_buf[6] != 0x00 || recv_buf[7] != 0x00) {
+        if (recv_buf[6] != 0x00 || recv_buf[7] != 0x00) {
+            fprintf(stderr, "[Sender] Connection attempt #%d: invalid length\n", i);
+            continue;
+        }
+
+        // Connection request successful
+        connected = true;
+        break;
+    }
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    // convert client's address to a string
+    if (inet_ntop(client.client_addr.ss_family, &(((struct sockaddr_in *)&client.client_addr)->sin_addr), client.client_ip_string, INET6_ADDRSTRLEN) == NULL)
+    {
+        perror("[receiver] inet_ntop");
+        exit(3);
+    }
+    printf("[receiver] client (%s) \"%s\" has successfully connected...\n", client.client_ip_string, client.username);
 
 
 }//end wait_for_connection
