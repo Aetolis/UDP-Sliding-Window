@@ -5,14 +5,6 @@
 
 using namespace std;
 
-typedef struct Packet {
-    uint32_t seq_num;
-    // bool ack_status;
-    uint16_t data_len;
-    char packet[MAX_PACKET_SIZE];
-    clock_t timestamp;
-} Packet;
-
 // Constructor
 SWPSender::SWPSender(){
     // Initialize UDP variables

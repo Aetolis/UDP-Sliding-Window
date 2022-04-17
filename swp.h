@@ -20,6 +20,14 @@
 #define WINDOW_SIZE 25 //this can be half the size of seqnum, which can itself use 4 bytes 
 #define MAX_RETRY 5
 
+typedef struct Packet {
+    uint32_t seq_num;
+    // bool ack_status;
+    uint16_t data_len;
+    char packet[MAX_PACKET_SIZE];
+    clock_t timestamp;
+} Packet;
+
 class SWPSender { 
     public:
         int connect(char *hostname);
