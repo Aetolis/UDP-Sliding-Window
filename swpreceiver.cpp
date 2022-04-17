@@ -22,10 +22,16 @@ SWPReceiver::SWPReceiver() {
     windowSize = 0;
 }
 
+// Destructor
+SWPReceiver::~SWPReceiver() {
+    // Close socket
+    close(sock_fd);
+}
+
 
 int SWPReceiver::setup(){
-    struct sockaddr_storage recv_addr;
-    socklen_t recv_addr_len = sizeof(recv_addr);
+    // struct sockaddr_storage recv_addr;
+    // socklen_t recv_addr_len = sizeof(recv_addr);
 
     struct addrinfo *recv_info;
 
@@ -47,7 +53,7 @@ int SWPReceiver::setup(){
         {
             break;
         }
-    }// End of create socket
+    } // End of create socket
 
     // Check if socket was created
     if (addr_ptr == NULL)
@@ -56,10 +62,6 @@ int SWPReceiver::setup(){
         exit(1);
     }
 
-    // Set up pollfd struct
-    pfds[0].fd = sock_fd;
-    pfds[0].events = POLLIN;
-
     // Get receiver IP address
     char recv_ip_str[INET6_ADDRSTRLEN];
     if (inet_ntop(addr_ptr->ai_family, &((struct sockaddr_in *)addr_ptr->ai_addr)->sin_addr, recv_ip_str, INET6_ADDRSTRLEN) == NULL)
@@ -67,7 +69,11 @@ int SWPReceiver::setup(){
         perror("[Receiver] inet_ntop");
         exit(1);
     }
-    printf("[Receiver] waiting for connection on %s...\n", recv_ip_str);
+    fprintf(stdout, "[Receiver] waiting for connection on %s...\n", recv_ip_str);
+
+    // Set up pollfd struct
+    pfds[0].fd = sock_fd;
+    pfds[0].events = POLLIN;
 
     freeaddrinfo(recv_info);
 
@@ -115,7 +121,7 @@ int SWPReceiver::setup(){
             uint32_t recv_seq_num;
             memcpy(&recv_seq_num, recv_buf, sizeof(uint32_t));
             init_seq_num = ntohl(recv_seq_num);
-            memcpy(vcon_packet, &init_seq_num, sizeof(uint32_t));
+            memcpy(vcon_packet, &recv_seq_num, sizeof(uint32_t));
 
             // Set ACK flag as 0x01
             vcon_packet[4] = 0x01;
@@ -127,15 +133,14 @@ int SWPReceiver::setup(){
             vcon_packet[6] = 0x00;
             vcon_packet[7] = 0x00;
 
-            if (sendto(sock_fd, vcon_packet, 8, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1) {
-                fprintf(stderr, "[Sender] connection attempt #%d: sendto error\n", i);
+            if (sendto(sock_fd, vcon_packet, 8, 0, (struct sockaddr *)&sender_addr, sender_addr_len) == -1) {
+                fprintf(stderr, "[Receiver] connection attempt #%d: sendto error\n", i);
                 continue;
             }
 
             // Connection established
             connected = true;
             break;
-
         }
     }
 
@@ -151,11 +156,14 @@ int SWPReceiver::setup(){
         fprintf(stderr, "[Receiver] failed to establish virtual connection with sender\n");
         exit(2);
     }
-}// End setup()
+
+    fprintf(stdout, "[Receiver] initial sequence number: %d\n", init_seq_num);
+
+    return 0;
+} // End setup()
 
 
 int SWPReceiver::receive_file(char *filename){
-
     //open up a file to dump info to
     // fp = fopen ("server_log.txt", "a"); //a for append, w for write which will overwrite
     // fprintf(fp,"==================================================================\n");
@@ -167,9 +175,8 @@ int SWPReceiver::receive_file(char *filename){
 
     //
 
-
-
-}//end of send_file
+    return 0;
+} // End of receive_file
 
 
 
@@ -183,7 +190,8 @@ int SWPReceiver::disconnect(){
     // fclose (fp);
     // close(sock_fd);
 
-}//end of disconnect
+    return 0;
+} // End of disconnect
 
 
 
