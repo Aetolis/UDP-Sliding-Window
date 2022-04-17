@@ -25,6 +25,12 @@ SWPSender::SWPSender(){
     }
 }
 
+// Destructor
+SWPSender::~SWPSender(){
+    // Close socket
+    close(sock_fd);
+}
+
 // Connect
 int SWPSender::connect(char *hostname) {
     struct addrinfo *sender_info;
@@ -52,6 +58,14 @@ int SWPSender::connect(char *hostname) {
         exit(2);
     }
 
+    char recv_ip[INET6_ADDRSTRLEN];
+    // get server IP address
+    if (inet_ntop(addr_ptr->ai_family, &((struct sockaddr_in *)addr_ptr->ai_addr)->sin_addr, recv_ip, INET6_ADDRSTRLEN) == NULL)
+    {
+        perror("[Sender] inet_ntop");
+        exit(1);
+    }
+
     // Set up pollfd struct
     pfds[0].fd = sock_fd;
     pfds[0].events = POLLIN;
@@ -77,6 +91,7 @@ int SWPSender::connect(char *hostname) {
 
     // Send connection request
     char recv_buf[HEADER_SIZE];
+    uint32_t recv_seq_num;
     bool connected = false;
     fprintf(stdout, "[Sender] establishing connection with receiver...\n");
 
@@ -100,9 +115,9 @@ int SWPSender::connect(char *hostname) {
             }
 
             // Check if initial sequence number is valid
-            uint32_t recv_seq_num;
             memcpy(&recv_seq_num, recv_buf, sizeof(uint32_t));
-            if (ntohl(recv_seq_num) != INIT_SEQ_NUM) {
+            recv_seq_num = ntohl(recv_seq_num);
+            if (recv_seq_num != (u_int32_t)INIT_SEQ_NUM) {
                 fprintf(stderr, "[Sender] connection attempt #%d: invalid initial sequence number\n", i);
                 exit(3);
             }
@@ -115,14 +130,14 @@ int SWPSender::connect(char *hostname) {
 
             // Check if control flag is 0x01
             if (recv_buf[5] != 0x01) {
-                fprintf(stderr, "[Sender] Connection attempt #%d: control flag invalid\n", i);
+                fprintf(stderr, "[Sender] connection attempt #%d: control flag invalid\n", i);
                 exit(3);
             }
 
             // Check if data length is 0x0000
             //if ((recv_buf[6] > 0x01 && recv_buf[7]  0x00)|| recv_buf[6] != 0x00 || recv_buf[7] != 0x00) {
             if (recv_buf[6] != 0x00 || recv_buf[7] != 0x00) {
-                fprintf(stderr, "[Sender] Connection attempt #%d: invalid data length\n", i);
+                fprintf(stderr, "[Sender] connection attempt #%d: invalid data length\n", i);
                 exit(3);
             }
 
@@ -133,22 +148,18 @@ int SWPSender::connect(char *hostname) {
     }
 
     if (connected) {
-        char recv_ip[INET6_ADDRSTRLEN];
-        // get server IP address
-        if (inet_ntop(addr_ptr->ai_family, &((struct sockaddr_in *)addr_ptr->ai_addr)->sin_addr, recv_ip, INET6_ADDRSTRLEN) == NULL)
-        {
-            perror("[Client] inet_ntop");
-            exit(1);
-        }
         fprintf(stdout, "[Sender] virtual connection established with %s!\n", recv_ip);
     } else {
         fprintf(stderr, "[Sender] failed to establish virtual connection\n");
         exit(1);
     }
+
+    fprintf(stdout, "[Sender] initial sequence number: %d\n", recv_seq_num);
+
+    return 0;
 }
 
 int SWPSender::send_file(char *filename) {
-
     // Check file exists
     if (access(filename, F_OK) == -1) {
         fprintf(stderr, "[Sender] file %s does not exist\n", filename);
@@ -177,7 +188,7 @@ int SWPSender::send_file(char *filename) {
 
         if (pfds[0].revents & POLLIN) {
             // Receive ACK
-            char recv_buf[8];
+            char recv_buf[HEADER_SIZE];
             if (recvfrom(sock_fd, recv_buf, 8, 0, NULL, 0) == -1) {
                 fprintf(stderr, "[Sender] failed to receive ACK\n");
             }
@@ -261,89 +272,93 @@ int SWPSender::send_file(char *filename) {
         }
     }
 
-
-
-
-}//end_send file
+    return 0;
+} // End_send file
 
 
 int SWPSender::disconnect(uint32_t final_seq_num, char *filename) {
-    // Establish virtual connection
-    char disc_buf[8]; //8 bytes bc sequnum is 4, ack is 1, control is 1, and length is 2
+    char disc_packet[HEADER_SIZE];
 
-    // Set initial sequence number
-    uint32_t seq_num = htonl((uint32_t)final_seq_num);
-    memcpy(disc_buf, &seq_num, sizeof(uint32_t)); 
+    // Set final sequence number
+    uint32_t seq_num = htonl(final_seq_num);
+    memcpy(disc_packet, &seq_num, sizeof(uint32_t)); 
 
     // Set ACK flag as 0
-    disc_buf[4] = 0x00;
+    disc_packet[4] = 0x00;
 
     // Set control flag as 0x02
-    disc_buf[5] = 0x02;
+    disc_packet[5] = 0x02;
 
     // Set length as 0
-    disc_buf[6] = 0x00;
-    disc_buf[8] = 0x00;
+    disc_packet[6] = 0x00;
+    disc_packet[7] = 0x00;
 
-    // Send connection request
-    char recv_buf[8];
+    // Send disconnect request
+    char recv_buf[HEADER_SIZE];
+    uint32_t recv_seq_num;
     bool acked = false;
-    fprintf(stdout, "[Sender] Establishing connection with receiver...\n");
+    fprintf(stdout, "[Sender] disconnecting from receiver...\n");
 
-    // Retry connection a set number of times
+    // Retry disconnect MAX_RETRY times
     for (int i = 0; i < MAX_RETRY; i++) { 
-        if (sendto(sock_fd, disc_buf, 8, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1) {
-            fprintf(stderr, "[Sender] Connection attempt #%d: failed to send initial connection request\n", i);
+        if (sendto(sock_fd, disc_packet, 8, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1) {
+            fprintf(stderr, "[Sender] disconnect attempt #%d: sendto error\n", i);
             continue;
         }
 
         // Wait for response
         if (poll(pfds, 1, 1000) == -1) {
-            fprintf(stderr, "[Sender] Connection attempt #%d: failed to poll\n", i);
+            fprintf(stderr, "[Sender] disconnect attempt #%d: poll error\n", i);
             continue;
         }
 
         if (pfds[0].revents & POLLIN) {
             if (recvfrom(sock_fd, recv_buf, 8, 0, NULL, 0) == -1) {
-                fprintf(stderr, "[Sender] Connection attempt #%d: failed to recieve initial connection response\n", i);
-                continue;
+                fprintf(stderr, "[Sender] disconnect attempt #%d: no response\n", i);
+                exit(3);
             }
 
-            // Check if initial sequence number is correct
-            uint32_t recv_seq_num;
+            // Check if final sequence number is valid
             memcpy(&recv_seq_num, recv_buf, sizeof(uint32_t));
-            if (ntohl(recv_seq_num) != final_seq_num) {
-                fprintf(stderr, "[Sender] Connection attempt #%d: invalid initial sequence number\n", i);
-                continue;
+            recv_seq_num = ntohl(recv_seq_num);
+            if (recv_seq_num != final_seq_num) {
+                fprintf(stderr, "[Sender] disconnect attempt #%d: invalid final sequence number\n", i);
+                exit(3);
             }
 
-            // Check if ACK flag is set
+            // Check if ACK flag is 0x01
             if (recv_buf[4] != 0x01) {
-                fprintf(stderr, "[Sender] Connection attempt #%d: ACK flag not set\n", i);
-                continue;
+                fprintf(stderr, "[Sender] disconnect attempt #%d: ACK flag invalid\n", i);
+                exit(3);
             }
 
-            // Check if control flag is valid
+            // Check if control flag is 0x02
             if (recv_buf[5] != 0x02) {
-                fprintf(stderr, "[Sender] Connection attempt #%d: connection setup flag not valid\n", i);
-                continue;
+                fprintf(stderr, "[Sender] disconnect attempt #%d: control flag invalid\n", i);
+                exit(3);
             }
 
-            // Check if length is valid
+            // Check if data length is 0x0000
             //if ((recv_buf[6] > 0x01 && recv_buf[7]  0x00)|| recv_buf[6] != 0x00 || recv_buf[7] != 0x00) {
             if (recv_buf[6] != 0x00 || recv_buf[7] != 0x00) {
-                fprintf(stderr, "[Sender] Connection attempt #%d: invalid length\n", i);
-                continue;
+                fprintf(stderr, "[Sender] disconnect attempt #%d: invalid data length\n", i);
+                exit(3);
             }
 
-            // Connection request successful
+            // Disconnect request successful
             acked = true;
             break;
         }
+    }
 
-    //same code as connect, but we are just sending diffrent info
-
-}//end of disconnect
+    if (acked) {
+        fprintf(stdout, "[Sender] successfully disconnected\n");
+    } else {
+        fprintf(stderr, "[Sender] failed to disconnect\n");
+        exit(1);
+    }
+    return 0;
+} // End of disconnect
 
 
 
