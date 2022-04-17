@@ -1,5 +1,6 @@
-// Sliding Window Protocol receiver
+// Sliding Window Protocol Receiver
 #include <swp.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -13,7 +14,7 @@ using namespace std;
 class SWPReceiver {
     public:
         //public methods
-        int wait_for_connection();
+        int setup();
         int receive_file(char *filename);
         int disconnect();
 
@@ -23,9 +24,14 @@ class SWPReceiver {
         int status;
         int numbytes;
         struct addrinfo hints, *addr_ptr;
-        struct pollfd pfds[1]; //data structure describing a polling request
+        struct pollfd pfds[1];
+        struct sockaddr_storage sender_addr;
+        socklen_t sender_addr_len;
+        char sender_ip[INET6_ADDRSTRLEN];
+
 
         // SWP variables
+        uint32_t init_seq_num;
         int LAF; //largest acceptable frame
         int LFR; //last frame reeived
         int NFE; //next frame expected
@@ -35,144 +41,160 @@ class SWPReceiver {
 
 };
 
-struct Client
-{
-    struct sockaddr_storage client_addr;
-    socklen_t addr_len;
-    char client_ip_string[INET6_ADDRSTRLEN];
-};
-
-
-int SWPReceiver::wait_for_connection(){
-    //very similar to project 2 
-
-    //set up buffers to store info about client
-    char s[INET6_ADDRSTRLEN];
-
-    struct Client client;//changed from clients[MAXCLIENTS]
-
-    struct sockaddr_storage recv_addr;
-    socklen_t recv_addr_len = sizeof recv_addr;//size of does not have brakets?
-    char recv_ip_str[INET6_ADDRSTRLEN];
-
-    struct addrinfo hints, *server_info, *ptr;
-    memset(&hints, 0, sizeof hints);
+// Constructor
+SWPReceiver::SWPReceiver() {
+    // Initialize UDP variables
+    memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_DGRAM;
     hints.ai_flags = AI_PASSIVE;
 
-    // it is NULL because we don't need to manually put in host name
-    if ((status = getaddrinfo(NULL, UDP_PORT, &hints, &server_info)) != 0)
+    sender_addr_len = sizeof(sender_addr);
+
+    // SWP variables
+    LAF = 0;
+    LFR = 0;
+    NFE = 0;
+    windowSize = 0;
+}
+
+
+int SWPReceiver::setup(){
+    struct sockaddr_storage recv_addr;
+    socklen_t recv_addr_len = sizeof(recv_addr);
+
+    struct addrinfo *recv_info;
+
+    if ((status = getaddrinfo(NULL, UDP_PORT, &hints, &recv_info)) != 0)
     {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(status));
         exit(1);
     }
 
-   // create a socket by going through the list of address structers that getadderinfo returns
-    for (ptr = server_info; ptr != NULL; ptr = ptr->ai_next)
+    // Iterate over linked-list of addrinfo structs returned by getadderinfo
+    for (addr_ptr = recv_info; addr_ptr != NULL; addr_ptr = addr_ptr->ai_next)
     {
         // create socket
-        if ((sockfd = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol)) == -1)
+        if ((sockfd = socket(addr_ptr->ai_family, addr_ptr->ai_socktype, addr_ptr->ai_protocol)) == -1)
         {
             continue;
         }
-        if (bind(sockfd, server_info->ai_addr, server_info->ai_addrlen) == 0)
+        if (bind(sockfd, recv_info->ai_addr, recv_info->ai_addrlen) == 0)
         {
             break;
         }
-    }//end of create socket
+    }// End of create socket
 
-    if (ptr == NULL)//check to see if bind was successful 
+    // Check if socket was created
+    if (addr_ptr == NULL)
     {
-        perror("[Server] could not bind");
-        exit(2);
-    }
-
-
-    // print server IP address
-    if (inet_ntop(ptr->ai_family, &((struct sockaddr_in *)ptr->ai_addr)->sin_addr, s, INET6_ADDRSTRLEN) == NULL)
-    {
-        perror("[receiver] inet_ntop");
-        exit(3);
-    }
-    printf("[receiver] waiting for connections on %s...\n", s);
-
-    freeaddrinfo(server_info);
-
-    //This is where the code gets weird compared to the last project
-
-    // receive the connection setup packet from sender
-    client.addr_len = sizeof client.client_addr;
-    char recv_buf[8];
-    if ((numbytes = recvfrom(sockfd, recv_buf, 8, 0, (struct sockaddr *)&client.client_addr, &client.addr_len)) == -1)
-    {
-        perror("[receiver] recvfrom");
+        perror("[Receiver] could not bind");
         exit(1);
     }
 
-    // This needs to be cleaned up
-    // Wait for response
-    if (poll(pfds, 1, 1000) == -1) {
-        fprintf(stderr, "[Sender] Connection attempt #%d: failed to poll\n", i);
-        continue;
-    }
+    // Set up pollfd struct
+    pfds[0].fd = sockfd;
+    pfds[0].events = POLLIN;
 
-    if (pfds[0].revents & POLLIN) {
-        if (recvfrom(sock_fd, recv_buf, 8, 0, NULL, 0) == -1) {
-            fprintf(stderr, "[Sender] Connection attempt #%d: failed to recieve initial connection response\n", i);
-            continue;
-        }
-
-        // Check if initial sequence number is correct
-        uint32_t recv_seq_num;
-        memcpy(&recv_seq_num, recv_buf, sizeof(uint32_t));
-        if (ntohl(recv_seq_num) != INIT_SEQ_NUM) {
-            fprintf(stderr, "[Sender] Connection attempt #%d: invalid initial sequence number\n", i);
-            continue;
-        }
-
-        // Check if ACK flag is set
-        if (recv_buf[4] != 0x01) {
-            fprintf(stderr, "[Sender] Connection attempt #%d: ACK flag not set\n", i);
-            continue;
-        }
-
-        // Check if connection setup flag is valid
-        if (recv_buf[5] != 0x01) {
-            fprintf(stderr, "[Sender] Connection attempt #%d: connection setup flag not valid\n", i);
-            continue;
-        }
-
-        // Check if length is valid
-        //if ((recv_buf[6] > 0x01 && recv_buf[7]  0x00)|| recv_buf[6] != 0x00 || recv_buf[7] != 0x00) {
-        if (recv_buf[6] != 0x00 || recv_buf[7] != 0x00) {
-            fprintf(stderr, "[Sender] Connection attempt #%d: invalid length\n", i);
-            continue;
-        }
-
-        // Connection request successful
-        connected = true;
-        break;
-    }
-
-
-    // convert client's address to a string
-    if (inet_ntop(client.client_addr.ss_family, &(((struct sockaddr_in *)&client.client_addr)->sin_addr), client.client_ip_string, INET6_ADDRSTRLEN) == NULL)
+    // Get receiver IP address
+    char recv_ip_str[INET6_ADDRSTRLEN];
+    if (inet_ntop(addr_ptr->ai_family, &((struct sockaddr_in *)addr_ptr->ai_addr)->sin_addr, recv_ip_str, INET6_ADDRSTRLEN) == NULL)
     {
-        perror("[receiver] inet_ntop");
-        exit(3);
+        perror("[Receiver] inet_ntop");
+        exit(1);
     }
-    printf("[receiver] client (%s) \"%s\" has successfully connected...\n", client.client_ip_string, client.username);
+    printf("[Receiver] waiting for connection on %s...\n", recv_ip_str);
 
+    freeaddrinfo(recv_info);
 
-}//end wait_for_connection
+    // Establish virtual connection with sender
+    char recv_buf[HEADER_SIZE];
+    bool connected = false;
+
+    // Retry receive MAX_RETRY times
+    for (int i = 0; i < MAX_RETRY; i++) {
+        // Wait for connection request
+        if (poll(pfds, 1, 1000) == -1) {
+            fprintf(stderr, "[Receiver] connection attempt #%d: poll error\n", i);
+            continue;
+        }
+
+        if (pfds[0].revents & POLLIN) {
+            if ((numbytes = recvfrom(sockfd, recv_buf, 8, 0, (struct sockaddr *)&sender_addr, &sender_addr_len)) == -1)
+            {
+                fprintf(stderr, "[Receiver] connection attempt #%d: recvfrom error\n", i);
+                continue;
+            }
+
+            // Check if ACK flag is 0x00
+            if (recv_buf[4] != 0x00) {
+                fprintf(stderr, "[Receiver] connection attempt #%d: ACK flag invalid\n", i);
+                continue;
+            }
+
+            // Check if control flag is 0x01
+            if (recv_buf[5] != 0x01) {
+                fprintf(stderr, "[Receiver] connection attempt #%d: control flag invalid\n", i);
+                continue;
+            }
+
+            // Check if data length is 0
+            if (recv_buf[6] != 0x00 || recv_buf[7] != 0x00) {
+                fprintf(stderr, "[Receiver] connection attempt #%d: data length invalid\n", i);
+                continue;
+            }
+
+            // Send ACK packet to sender
+            char vcon_packet[HEADER_SIZE];
+
+            // Set initial sequence number
+            uint32_t recv_seq_num;
+            memcpy(&recv_seq_num, recv_buf, sizeof(uint32_t));
+            init_seq_num = ntohl(recv_seq_num);
+            memcpy(vcon_packet, &init_seq_num, sizeof(uint32_t));
+
+            // Set ACK flag as 0x01
+            vcon_packet[4] = 0x01;
+
+            // Set control flag as 0x01
+            vcon_packet[5] = 0x01;
+
+            // Set data length as 0
+            vcon_packet[6] = 0x00;
+            vcon_packet[7] = 0x00;
+
+            if (sendto(sockfd, vcon_packet, 8, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1) {
+                fprintf(stderr, "[Sender] connection attempt #%d: sendto error\n", i);
+                continue;
+            }
+
+            // Connection established
+            connected = true;
+            break;
+
+        }
+    }
+
+    if (connected) {
+        // convert client's address to a string
+        if (inet_ntop(sender_addr.ss_family, &(((struct sockaddr_in *)&sender_addr)->sin_addr), sender_ip, INET6_ADDRSTRLEN) == NULL)
+        {
+            perror("[Receiver] inet_ntop error");
+            exit(2);
+        }
+        printf("[Receiver] connection established with %s\n", sender_ip);
+    } else {
+        fprintf(stderr, "[Receiver] failed to establish virtual connection with sender\n");
+        exit(2);
+    }
+}// End setup()
 
 
 int SWPReceiver::receive_file(char *filename){
 
     //open up a file to dump info to
-    fp = fopen ("server_log.txt", "a"); //a for append, w for write which will overwrite
-    fprintf(fp,"==================================================================\n");
+    // fp = fopen ("server_log.txt", "a"); //a for append, w for write which will overwrite
+    // fprintf(fp,"==================================================================\n");
     //we need to astablish some kind of buffer that acts as a slidding frame
 
     //I think its an endless while loop, but we might use poll
@@ -191,11 +213,11 @@ int SWPReceiver::receive_file(char *filename){
 int SWPReceiver::disconnect(){
     
 
-    printf("[receiver] closing socket...\n");
+    printf("[Receiver] closing socket...\n");
 
     //close log file and socket pointer
-    fclose (fp);
-    close(sockfd);
+    // fclose (fp);
+    // close(sockfd);
 
 }//end of disconnect
 
