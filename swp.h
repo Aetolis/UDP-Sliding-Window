@@ -32,6 +32,8 @@ class SWPSender {
     public:
         // Default constructor
         SWPSender();
+        // Destructor
+        ~SWPSender();
 
         // Public methods
         int connect(char *hostname);
@@ -60,6 +62,8 @@ class SWPReceiver {
     public:
         // Default constructor
         SWPReceiver();
+        // Destructor
+        ~SWPReceiver();
 
         // Public methods
         int setup();
