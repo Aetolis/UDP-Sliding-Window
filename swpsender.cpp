@@ -1,7 +1,7 @@
 // swpsender.cpp
 // SWP sender class implementation
 
-#include <swp.h>
+#include "swp.h"
 
 using namespace std;
 

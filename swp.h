@@ -20,7 +20,7 @@
 #define WINDOW_SIZE 25 //this can be half the size of seqnum, which can itself use 4 bytes 
 #define MAX_RETRY 5
 
-class SWPSender{ 
+class SWPSender { 
     public:
         int connect(char *hostname);
         int send_file(char *filename);

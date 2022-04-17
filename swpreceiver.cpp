@@ -1,7 +1,7 @@
 // swpreceiver.cpp
 // SWP Receiver class implementation
 
-#include <swp.h>
+#include "swp.h"
 
 using namespace std;
 
