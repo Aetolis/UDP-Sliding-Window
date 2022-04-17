@@ -1,5 +1,6 @@
-// Sliding Window Protocol sender
+// Sliding Window Protocol Sender
 #include <swp.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -51,6 +52,11 @@ class SWPSender{
 
 // Constructor
 SWPSender::SWPSender(){
+    // Initialize UDP variables
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET;      // IPv4
+    hints.ai_socktype = SOCK_DGRAM; // UDP socket
+
     packet_num = 0;
     LAR = 0;
     LFS = 0;
@@ -66,20 +72,17 @@ SWPSender::SWPSender(){
 
 // Connect
 int SWPSender::connect(char *hostname) {
-    struct addrinfo *client_info;
+    struct addrinfo *sender_info;
 
-    memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_INET;      // IPv4
-    hints.ai_socktype = SOCK_DGRAM; // UDP socket
-
-    if ((status = getaddrinfo(hostname, UDP_PORT, &hints, &client_info)) != 0)
+    // Get sender's address info
+    if ((status = getaddrinfo(hostname, UDP_PORT, &hints, &sender_info)) != 0)
     {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(status));
         exit(1);
     }
 
-    // loop through all the results and make a socket
-    for (addr_ptr = client_info; addr_ptr != NULL; addr_ptr = addr_ptr->ai_next)
+    // Iterate over linked-list of addrinfo structs returned by getadderinfo
+    for (addr_ptr = sender_info; addr_ptr != NULL; addr_ptr = addr_ptr->ai_next)
     {
         sock_fd = socket(addr_ptr->ai_family, addr_ptr->ai_socktype, addr_ptr->ai_protocol);
         if (sock_fd != -1)
@@ -94,78 +97,78 @@ int SWPSender::connect(char *hostname) {
         exit(2);
     }
 
-    // setup poll
+    // Set up pollfd struct
     pfds[0].fd = sock_fd;
     pfds[0].events = POLLIN;
 
-    freeaddrinfo(client_info);
+    freeaddrinfo(sender_info);
 
-    // Establish virtual connection
-    char con_buf[8]; //8 bytes bc sequnum is 4, ack is 1, control is 1, and length is 2
+    // Establish virtual connection with receiver
+    char vcon_packet[HEADER_SIZE];
 
     // Set initial sequence number
     uint32_t seq_num = htonl((uint32_t)INIT_SEQ_NUM);
-    memcpy(con_buf, &seq_num, sizeof(uint32_t)); 
+    memcpy(vcon_packet, &seq_num, sizeof(uint32_t)); 
 
-    // Set ACK flag as 0
-    con_buf[4] = 0x00;
+    // Set ACK flag as 0x00
+    vcon_packet[4] = 0x00;
 
     // Set control flag as 0x01
-    con_buf[5] = 0x01;
+    vcon_packet[5] = 0x01;
 
-    // Set length as 0
-    con_buf[6] = 0x00;
-    con_buf[8] = 0x00;
+    // Set data length as 0
+    vcon_packet[6] = 0x00;
+    vcon_packet[7] = 0x00;
 
     // Send connection request
-    char recv_buf[8];
+    char recv_buf[HEADER_SIZE];
     bool connected = false;
-    fprintf(stdout, "[Sender] Establishing connection with receiver...\n");
+    fprintf(stdout, "[Sender] establishing connection with receiver...\n");
 
-    // Retry connection a set number of times
+    // Retry connection MAX_RETRY times
     for (int i = 0; i < MAX_RETRY; i++) { 
-        if (sendto(sockfd, con_buf, 8, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1) {
-            fprintf(stderr, "[Sender] Connection attempt #%d: failed to send initial connection request\n", i);
+        if (sendto(sockfd, vcon_packet, 8, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1) {
+            fprintf(stderr, "[Sender] connection attempt #%d: sendto error\n", i);
             continue;
         }
 
         // Wait for response
         if (poll(pfds, 1, 1000) == -1) {
-            fprintf(stderr, "[Sender] Connection attempt #%d: failed to poll\n", i);
+            fprintf(stderr, "[Sender] connection attempt #%d: poll error\n", i);
             continue;
         }
 
         if (pfds[0].revents & POLLIN) {
             if (recvfrom(sock_fd, recv_buf, 8, 0, NULL, 0) == -1) {
-                fprintf(stderr, "[Sender] Connection attempt #%d: failed to recieve initial connection response\n", i);
-                continue;
+                fprintf(stderr, "[Sender] connection attempt #%d: no response\n", i);
+                exit(3);
             }
 
-            // Check if initial sequence number is correct
+            // Check if initial sequence number is valid
             uint32_t recv_seq_num;
             memcpy(&recv_seq_num, recv_buf, sizeof(uint32_t));
             if (ntohl(recv_seq_num) != INIT_SEQ_NUM) {
-                fprintf(stderr, "[Sender] Connection attempt #%d: invalid initial sequence number\n", i);
-                continue;
+                fprintf(stderr, "[Sender] connection attempt #%d: invalid initial sequence number\n", i);
+                exit(3);
             }
 
-            // Check if ACK flag is set
+            // Check if ACK flag is 0x01
             if (recv_buf[4] != 0x01) {
-                fprintf(stderr, "[Sender] Connection attempt #%d: ACK flag not set\n", i);
-                continue;
+                fprintf(stderr, "[Sender] connection attempt #%d: ACK flag invalid\n", i);
+                exit(3);
             }
 
-            // Check if connection setup flag is valid
+            // Check if control flag is 0x01
             if (recv_buf[5] != 0x01) {
-                fprintf(stderr, "[Sender] Connection attempt #%d: connection setup flag not valid\n", i);
-                continue;
+                fprintf(stderr, "[Sender] Connection attempt #%d: control flag invalid\n", i);
+                exit(3);
             }
 
-            // Check if length is valid
+            // Check if data length is 0x0000
             //if ((recv_buf[6] > 0x01 && recv_buf[7]  0x00)|| recv_buf[6] != 0x00 || recv_buf[7] != 0x00) {
             if (recv_buf[6] != 0x00 || recv_buf[7] != 0x00) {
-                fprintf(stderr, "[Sender] Connection attempt #%d: invalid length\n", i);
-                continue;
+                fprintf(stderr, "[Sender] Connection attempt #%d: invalid data length\n", i);
+                exit(3);
             }
 
             // Connection request successful
@@ -174,18 +177,18 @@ int SWPSender::connect(char *hostname) {
         }
     }
 
-    if (!connected) {
-        fprintf(stderr, "[Sender] failed to establish connection\n");
-        exit(1);
-    } else {
-        char server_ip[INET6_ADDRSTRLEN];
+    if (connected) {
+        char recv_ip[INET6_ADDRSTRLEN];
         // get server IP address
-        if (inet_ntop(addr_ptr->ai_family, &((struct sockaddr_in *)addr_ptr->ai_addr)->sin_addr, server_ip, INET6_ADDRSTRLEN) == NULL)
+        if (inet_ntop(addr_ptr->ai_family, &((struct sockaddr_in *)addr_ptr->ai_addr)->sin_addr, recv_ip, INET6_ADDRSTRLEN) == NULL)
         {
             perror("[Client] inet_ntop");
             exit(1);
         }
-        fprintf(stdout, "[Sender] connection established with %s!\n", server_ip);
+        fprintf(stdout, "[Sender] virtual connection established with %s!\n", recv_ip);
+    } else {
+        fprintf(stderr, "[Sender] failed to establish virtual connection\n");
+        exit(1);
     }
 }
 
@@ -393,7 +396,7 @@ int SWPSender::disconnect(uint32_t final_seq_num, char *filename) {
 
 
 
-int main() {
+// int main() {
 
     
 
@@ -401,5 +404,5 @@ int main() {
 
     
     
-}
+// }
 
