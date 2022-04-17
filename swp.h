@@ -30,6 +30,10 @@ typedef struct Packet {
 
 class SWPSender { 
     public:
+        // Default constructor
+        SWPSender();
+
+        // Public methods
         int connect(char *hostname);
         int send_file(char *filename);
         int disconnect(uint32_t seq_num, char *filename);
@@ -54,7 +58,10 @@ class SWPSender {
 
 class SWPReceiver {
     public:
-        //public methods
+        // Default constructor
+        SWPReceiver();
+
+        // Public methods
         int setup();
         int receive_file(char *filename);
         int disconnect();
