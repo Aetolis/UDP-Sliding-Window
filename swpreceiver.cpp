@@ -1,45 +1,9 @@
-// Sliding Window Protocol Receiver
+// swpreceiver.cpp
+// SWP Receiver class implementation
+
 #include <swp.h>
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <poll.h>
-#include <string.h>
-#include <netdb.h>
-#include <arpa/inet.h>
-
 using namespace std;
-
-class SWPReceiver {
-    public:
-        //public methods
-        int setup();
-        int receive_file(char *filename);
-        int disconnect();
-
-    private:
-        // UDP variables
-        int sockfd;
-        int status;
-        int numbytes;
-        struct addrinfo hints, *addr_ptr;
-        struct pollfd pfds[1];
-        struct sockaddr_storage sender_addr;
-        socklen_t sender_addr_len;
-        char sender_ip[INET6_ADDRSTRLEN];
-
-
-        // SWP variables
-        uint32_t init_seq_num;
-        int LAF; //largest acceptable frame
-        int LFR; //last frame reeived
-        int NFE; //next frame expected
-        int windowSize; 
-
-        // Buffer variables
-
-};
 
 // Constructor
 SWPReceiver::SWPReceiver() {
@@ -75,11 +39,11 @@ int SWPReceiver::setup(){
     for (addr_ptr = recv_info; addr_ptr != NULL; addr_ptr = addr_ptr->ai_next)
     {
         // create socket
-        if ((sockfd = socket(addr_ptr->ai_family, addr_ptr->ai_socktype, addr_ptr->ai_protocol)) == -1)
+        if ((sock_fd = socket(addr_ptr->ai_family, addr_ptr->ai_socktype, addr_ptr->ai_protocol)) == -1)
         {
             continue;
         }
-        if (bind(sockfd, recv_info->ai_addr, recv_info->ai_addrlen) == 0)
+        if (bind(sock_fd, recv_info->ai_addr, recv_info->ai_addrlen) == 0)
         {
             break;
         }
@@ -93,7 +57,7 @@ int SWPReceiver::setup(){
     }
 
     // Set up pollfd struct
-    pfds[0].fd = sockfd;
+    pfds[0].fd = sock_fd;
     pfds[0].events = POLLIN;
 
     // Get receiver IP address
@@ -120,7 +84,7 @@ int SWPReceiver::setup(){
         }
 
         if (pfds[0].revents & POLLIN) {
-            if ((numbytes = recvfrom(sockfd, recv_buf, 8, 0, (struct sockaddr *)&sender_addr, &sender_addr_len)) == -1)
+            if ((numbytes = recvfrom(sock_fd, recv_buf, 8, 0, (struct sockaddr *)&sender_addr, &sender_addr_len)) == -1)
             {
                 fprintf(stderr, "[Receiver] connection attempt #%d: recvfrom error\n", i);
                 continue;
@@ -163,7 +127,7 @@ int SWPReceiver::setup(){
             vcon_packet[6] = 0x00;
             vcon_packet[7] = 0x00;
 
-            if (sendto(sockfd, vcon_packet, 8, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1) {
+            if (sendto(sock_fd, vcon_packet, 8, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1) {
                 fprintf(stderr, "[Sender] connection attempt #%d: sendto error\n", i);
                 continue;
             }
@@ -217,7 +181,7 @@ int SWPReceiver::disconnect(){
 
     //close log file and socket pointer
     // fclose (fp);
-    // close(sockfd);
+    // close(sock_fd);
 
 }//end of disconnect
 

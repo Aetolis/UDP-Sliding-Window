@@ -1,14 +1,7 @@
-// Sliding Window Protocol Sender
-#include <swp.h>
+// swpsender.cpp
+// SWP sender class implementation
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <poll.h>
-#include <time.h>
-#include <string.h>
-#include <netdb.h>
-#include <arpa/inet.h>
+#include <swp.h>
 
 using namespace std;
 
@@ -19,36 +12,6 @@ typedef struct Packet {
     char packet[MAX_PACKET_SIZE];
     clock_t timestamp;
 } Packet;
-
-
-class SWPSender{ 
-    public:
-        int connect(char *hostname);
-        int send_file(char *filename);
-        int disconnect(uint32_t seq_num, char *filename);
-
-    private:
-        // UDP variables
-        int sock_fd;
-        int status;
-        int numbytes;
-        struct addrinfo hints, *addr_ptr;
-        struct pollfd pfds[1]; //data structure describing a polling request
-
-        // SWP variables
-        uint32_t packet_num;
-        int LAR; //last ack recived
-        int LFS; //last frame sent
-        int windowSize; 
-
-        // Buffer variables
-        Packet send_buf[WINDOW_SIZE];
-
-        // Helper functions
-
-
-
-};
 
 // Constructor
 SWPSender::SWPSender(){
@@ -127,7 +90,7 @@ int SWPSender::connect(char *hostname) {
 
     // Retry connection MAX_RETRY times
     for (int i = 0; i < MAX_RETRY; i++) { 
-        if (sendto(sockfd, vcon_packet, 8, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1) {
+        if (sendto(sock_fd, vcon_packet, 8, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1) {
             fprintf(stderr, "[Sender] connection attempt #%d: sendto error\n", i);
             continue;
         }
@@ -295,7 +258,7 @@ int SWPSender::send_file(char *filename) {
                 memcpy(send_buf[i].packet + 8, read_buf, cur_len);
             } 
             
-            if (sendto(sockfd, send_buf[i].packet, HEADER_SIZE + send_buf[i].data_len, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1) {
+            if (sendto(sock_fd, send_buf[i].packet, HEADER_SIZE + send_buf[i].data_len, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1) {
                 fprintf(stderr, "[Sender] failed to send packet #%d\n", send_buf[i].seq_num);
             }
             fprintf(stdout, "[Sender] sent packet #%d\n", send_buf[i].seq_num);
@@ -337,7 +300,7 @@ int SWPSender::disconnect(uint32_t final_seq_num, char *filename) {
 
     // Retry connection a set number of times
     for (int i = 0; i < MAX_RETRY; i++) { 
-        if (sendto(sockfd, disc_buf, 8, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1) {
+        if (sendto(sock_fd, disc_buf, 8, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1) {
             fprintf(stderr, "[Sender] Connection attempt #%d: failed to send initial connection request\n", i);
             continue;
         }
