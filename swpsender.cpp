@@ -184,7 +184,7 @@ int SWPSender::send_file(char *filename)
     }
 
     // Open file
-    FILE *fp = fopen(filename, "r");
+    FILE *fp = fopen(filename, "rb");
     if (fp == NULL)
     {
         fprintf(stderr, "[Sender] failed to open \"%s\"\n", filename);
@@ -313,6 +313,7 @@ int SWPSender::send_file(char *filename)
 
                 // Copy data into packet buffer
                 memcpy(send_buf[i].packet + HEADER_SIZE, read_buf, cur_len);
+                fprintf(stdout, "data: %s\n", send_buf[i].packet + HEADER_SIZE);
             } else if (((float)(clock() - send_buf[i].timestamp))/CLOCKS_PER_SEC < 2.0) {
                 break;
             }

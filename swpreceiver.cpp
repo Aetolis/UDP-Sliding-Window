@@ -168,14 +168,14 @@ int SWPReceiver::setup(){
 
 int SWPReceiver::receive_file(char *filename){
     // Open file for output
-    FILE *fp = fopen(filename, "w");
+    FILE *fp = fopen(filename, "wb");
     if (fp == NULL) {
         fprintf(stderr, "[Sender] failed to open \"%s\"\n", filename);
         exit(1);
     }
 
     bool EOF_flag = false;
-    char recv_buf[HEADER_SIZE];
+    char recv_buf[MAX_PACKET_SIZE];
     char ack_buf[HEADER_SIZE];
     // uint16_t data_len;
     uint32_t recv_seq_num;
@@ -190,7 +190,7 @@ int SWPReceiver::receive_file(char *filename){
 
         // Receive data packet from sender
         if (pfds[0].revents & POLLIN) {
-            if (recvfrom(sock_fd, recv_buf, HEADER_SIZE, 0, (struct sockaddr *)&sender_addr, &sender_addr_len) == -1)
+            if (recvfrom(sock_fd, recv_buf, MAX_PACKET_SIZE, 0, (struct sockaddr *)&sender_addr, &sender_addr_len) == -1)
             {
                 fprintf(stderr, "[Receiver] recvfrom error\n");
                 continue;
@@ -225,32 +225,33 @@ int SWPReceiver::receive_file(char *filename){
                     continue;
                 }
             }
-            fprintf(stdout, "hi: %d\n", recv_seq_num);
 
             // Check data length
             if (window_buf[recv_seq_num % WINDOW_SIZE].data_len != 0) {
                 fprintf(stderr, "[Receiver] duplicate packet: %d\n", recv_seq_num);
                 continue;
             }
-            fprintf(stdout, "hi1\n");
+
             memcpy(&window_buf[recv_seq_num % WINDOW_SIZE].data_len, recv_buf + 6, sizeof(uint16_t));
             window_buf[recv_seq_num % WINDOW_SIZE].data_len = ntohs(window_buf[recv_seq_num % WINDOW_SIZE].data_len);
             if (window_buf[recv_seq_num % WINDOW_SIZE].data_len >(u_int16_t)MAX_DATA_SIZE) {
                 fprintf(stderr, "[Receiver] data length invalid\n");
                 continue;
             }
-            fprintf(stdout, "hi2\n");
+
             // Read packet data to window buffer
             memcpy(window_buf[recv_seq_num % WINDOW_SIZE].data, recv_buf + 8, window_buf[recv_seq_num % WINDOW_SIZE].data_len);
-            printf("[Receiver] received data packet #%d\n", window_buf[recv_seq_num % WINDOW_SIZE].data_len);
+            printf("[Receiver] received data packet #%d with len %d\n", recv_seq_num, window_buf[recv_seq_num % WINDOW_SIZE].data_len);
         }
 
         // Determine packet to ACK
-        if (window_buf[NFE].data_len == 0) {
+        if (window_buf[NFE % WINDOW_SIZE].data_len == 0) {
+            fprintf(stdout, "[Receiver] no data packet to ACK: NFE %d\n", NFE);
             continue;
         } else {
             for (int i = NFE; i <= NFE + WINDOW_SIZE; i++) {
                 // Write data to file
+                fprintf(stdout, "data: %s\n", window_buf[i % WINDOW_SIZE].data);
                 if (fwrite(window_buf[i % WINDOW_SIZE].data, sizeof(char), window_buf[i % WINDOW_SIZE].data_len, fp) != window_buf[i % WINDOW_SIZE].data_len) {
                     fprintf(stderr, "[Receiver] fwrite error\n");
                     exit(1);
