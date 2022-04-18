@@ -192,6 +192,7 @@ int SWPSender::send_file(char *filename)
     }
 
     bool EOF_flag = false;
+    bool break_flag = false;
     int cur_len;
     char read_buf[MAX_DATA_SIZE];
     char recv_buf[HEADER_SIZE];
@@ -199,7 +200,7 @@ int SWPSender::send_file(char *filename)
     uint32_t temp_seq_num;
     uint16_t temp_data_len;
 
-    while (!EOF_flag)
+    while (!break_flag)
     {
         // Check for ACKs
         if (poll(pfds, 1, 0) == -1)
@@ -280,10 +281,10 @@ int SWPSender::send_file(char *filename)
             
         }
 
-        // Populate wvdow
+        // Populate window
         for (int i = LAR + 1; i <= LAR + WINDOW_SIZE; i++)
         {
-            if (send_buf[i].data_len == 0)
+            if (!EOF_flag && send_buf[i].data_len == 0)
             {
                 // Set packet sequence number
                 send_buf[i].seq_num = packet_num % MAX_SEQ_NUM;
@@ -294,6 +295,7 @@ int SWPSender::send_file(char *filename)
                 if (cur_len < MAX_DATA_SIZE || cur_len == 0)
                 {
                     EOF_flag = true;
+                    // if final ack is received we can disconnect.
                 }
                 send_buf[i].data_len = (uint32_t)cur_len;
 
@@ -326,7 +328,7 @@ int SWPSender::send_file(char *filename)
             send_buf[i].timestamp = clock();
             fprintf(stdout, "[Sender] sent packet #%d at %f\n", send_buf[i].seq_num, (float)send_buf[i].timestamp / CLOCKS_PER_SEC);
             
-            // REDO THIS IF STATEMENT
+            // REDO THIS IF STATEMENT check if buffer is completely empty
             if (EOF_flag)
             {
                 break;
