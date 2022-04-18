@@ -50,13 +50,19 @@ class SWPSender {
 
         // SWP variables
         uint32_t packet_num;
-        int LAR; //last ack recived
-        int LFS; //last frame sent
+        uint32_t LAR; //last ack recived
+        uint32_t LFS; //last frame sent
         int windowSize; 
 
         // Buffer variables
         Packet send_buf[WINDOW_SIZE];
 };
+
+typedef struct RecvPacket {
+    uint32_t seq_num;
+    uint16_t data_len;
+    char data[MAX_DATA_SIZE];
+} RecvPacket;
 
 class SWPReceiver {
     public:
@@ -83,14 +89,19 @@ class SWPReceiver {
 
 
         // SWP variables
-        uint32_t init_seq_num;
-        int LAF; //largest acceptable frame
-        int LFR; //last frame reeived
-        int NFE; //next frame expected
+        uint32_t seq_num;
+        uint32_t NFE; // Next frame expected
+        uint32_t LAF; // largest acceptable frame
         int windowSize; 
 
         // Buffer variables
-
+        RecvPacket window_buf[WINDOW_SIZE];
 };
+
+// Produce an error with probability 1/chance
+// bool error(int chance)
+// {
+//     return (rand() < (RAND_MAX / chance));
+// }
 
 

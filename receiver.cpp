@@ -6,4 +6,6 @@
 int main (void) {
     SWPReceiver receiver;
     receiver.setup();
+
+    receiver.receive_file("test.txt");
 }

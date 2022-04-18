@@ -11,4 +11,6 @@ int main (int argc, char *argv[]) {
 
     SWPSender sender;
     sender.connect(argv[1]);
+
+    sender.send_file(argv[2]);
 }

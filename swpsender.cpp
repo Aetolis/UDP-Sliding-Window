@@ -14,8 +14,8 @@ SWPSender::SWPSender()
     hints.ai_socktype = SOCK_DGRAM; // UDP socket
 
     packet_num = 0;
-    LAR = 0;
-    LFS = 0;
+    LAR = INIT_SEQ_NUM;
+    LFS = (INIT_SEQ_NUM + WINDOW_SIZE - 1) % MAX_SEQ_NUM;
     // windowSize = WINDOW_SIZE;
 
     // Initialize the send buffer
@@ -147,7 +147,6 @@ int SWPSender::connect(char *hostname)
             }
 
             // Check if data length is 0x0000
-            // if ((recv_buf[6] > 0x01 && recv_buf[7]  0x00)|| recv_buf[6] != 0x00 || recv_buf[7] != 0x00) {
             if (recv_buf[6] != 0x00 || recv_buf[7] != 0x00)
             {
                 fprintf(stderr, "[Sender] connection attempt #%d: invalid data length\n", i);
@@ -203,10 +202,10 @@ int SWPSender::send_file(char *filename)
     while (!EOF_flag)
     {
         // Check for ACKs
-        if (poll(pfds, 1, -1) == -1)
+        if (poll(pfds, 1, 0) == -1)
         {
             fprintf(stderr, "[Sender] failed to poll\n");
-            exit(1);
+            continue;
         }
 
         if (pfds[0].revents & POLLIN)
@@ -215,51 +214,73 @@ int SWPSender::send_file(char *filename)
             if (recvfrom(sock_fd, recv_buf, HEADER_SIZE, 0, NULL, 0) == -1)
             {
                 fprintf(stderr, "[Sender] failed to receive ACK\n");
+                continue;
             }
 
-            // Check if ACK flag is set
-            else if (recv_buf[4] != 0x01)
+            // Check if ACK flag is 0x01
+            if (recv_buf[4] != 0x01)
             {
                 fprintf(stderr, "[Sender] ACK flag not set\n");
+                continue;
             }
 
-            // Check if connection setup flag is valid
-            else if (recv_buf[5] != 0x01)
+            // Check if control flag is 0x00
+            if (recv_buf[5] != 0x00)
             {
-                fprintf(stderr, "[Sender] connection setup flag not valid\n");
+                fprintf(stderr, "[Sender] control flag not valid\n");
+                continue;
             }
 
-            // Check if length is valid
-            else if (recv_buf[6] != 0x00 || recv_buf[7] != 0x00)
+            // Check if data length is valid
+            if (recv_buf[6] != 0x00 || recv_buf[7] != 0x00)
             {
-                fprintf(stderr, "[Sender] invalid length\n");
+                fprintf(stderr, "[Sender] invalid data length\n");
+                continue;
             }
 
-            else
+            // Check if sequence number is valid
+            memcpy(&recv_seq_num, recv_buf, sizeof(uint32_t));
+            recv_seq_num = ntohl(recv_seq_num);
+            if (recv_seq_num > (u_int32_t)MAX_SEQ_NUM)
             {
-                // Check if sequence number is valid
-                memcpy(&recv_seq_num, recv_buf, sizeof(uint32_t));
-                recv_seq_num = ntohl(recv_seq_num);
-                if (recv_seq_num > MAX_SEQ_NUM || recv_seq_num <= LAR || recv_seq_num > LFS)
+                fprintf(stderr, "[Sender] invalid sequence number: %d\n", recv_seq_num);
+                continue;
+            } else if (LAR < LFS){
+                if (recv_seq_num < LAR || recv_seq_num > LFS)
                 {
-                    fprintf(stderr, "[Sender] invalid sequence number\n");
+                    fprintf(stderr, "[Sender] ACK sequence number not in window: %d\n", recv_seq_num);
+                    continue;
                 }
-                else
+            } else {
+                if (recv_seq_num < LAR && recv_seq_num > LFS)
                 {
-                    // ACK received
-                    fprintf(stdout, "[Sender] ACK received for sequence number %d\n", recv_seq_num);
-                    for (int i = LAR + 1; i <= recv_seq_num; i++)
-                    {
-                        send_buf[i].data_len = 0;
-                        memset(send_buf[i].packet, 0, MAX_PACKET_SIZE);
-                    }
-                    LAR = recv_seq_num;
-                    LFS = (recv_seq_num + WINDOW_SIZE) % MAX_SEQ_NUM;
+                    fprintf(stderr, "[Sender] ACK sequence number not in window: %d\n", recv_seq_num);
+                    continue;
                 }
             }
+
+            // ACK received
+            fprintf(stdout, "[Sender] ACK received for sequence number %d\n", recv_seq_num);
+            if (LAR < recv_seq_num) {
+                for (int i = LAR; i <= recv_seq_num; i++)
+                {
+                    send_buf[i % WINDOW_SIZE].data_len = 0;
+                    memset(send_buf[i % WINDOW_SIZE].packet, 0, MAX_PACKET_SIZE);
+                }
+            } else {
+                for (int i = LAR; i <= LAR + recv_seq_num + 1; i++)
+                {
+                    send_buf[i % WINDOW_SIZE].data_len = 0;
+                    memset(send_buf[i % WINDOW_SIZE].packet, 0, MAX_PACKET_SIZE);
+                }
+            }
+            LAR = (recv_seq_num + 1) % MAX_SEQ_NUM;
+            LFS = (recv_seq_num + WINDOW_SIZE) % MAX_SEQ_NUM;
+            
+            
         }
 
-        // Populate buffer
+        // Populate wvdow
         for (int i = LAR + 1; i <= LAR + WINDOW_SIZE; i++)
         {
             if (send_buf[i].data_len == 0)
@@ -292,14 +313,19 @@ int SWPSender::send_file(char *filename)
 
                 // Copy data into packet buffer
                 memcpy(send_buf[i].packet + HEADER_SIZE, read_buf, cur_len);
+            } else if (((float)(clock() - send_buf[i].timestamp))/CLOCKS_PER_SEC < 2.0) {
+                break;
             }
 
             if (sendto(sock_fd, send_buf[i].packet, HEADER_SIZE + send_buf[i].data_len, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1)
             {
                 fprintf(stderr, "[Sender] failed to send packet #%d\n", send_buf[i].seq_num);
             }
-            fprintf(stdout, "[Sender] sent packet #%d\n", send_buf[i].seq_num);
 
+            send_buf[i].timestamp = clock();
+            fprintf(stdout, "[Sender] sent packet #%d at %f\n", send_buf[i].seq_num, (float)send_buf[i].timestamp / CLOCKS_PER_SEC);
+            
+            // REDO THIS IF STATEMENT
             if (EOF_flag)
             {
                 break;
