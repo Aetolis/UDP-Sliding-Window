@@ -1,24 +1,24 @@
 all: sender receiver
 
 swpsender.o: swpsender.cpp
-	g++ -c swpsender.cpp -o swpsender.o -Wall -Werror
+	g++ -c swpsender.cpp
 
 swpreceiver.o: swpreceiver.cpp
-	g++ -c swpreceiver.cpp -o swpreceiver.o -Wall -Werror
+	g++ -c swpreceiver.cpp
 
 sender.o: sender.cpp
-	g++ -c sender.cpp -o sender.o -Wall -Werror
+	g++ -c sender.cpp
 
 receiver.o: receiver.cpp
-	g++ -c receiver.cpp -o receiver.o -Wall -Werror
+	g++ -c receiver.cpp
 
 sender: swpsender.o sender.o
-	g++ -o sender swpsender.o sender.o -Wall -Werror
+	g++ -o sender swpsender.o sender.o
 
 receiver: swpreceiver.o receiver.o
-	g++ -o receiver swpreceiver.o receiver.o -Wall -Werror
+	g++ -o receiver swpreceiver.o receiver.o
 
 clean:
-	rm -f *.o sender receiver test.txt
+	rm -f *.o sender receiver
 
 
