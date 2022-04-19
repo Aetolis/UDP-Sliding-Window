@@ -43,7 +43,7 @@ int SWPSender::connect(char *hostname)
     if ((status = getaddrinfo(hostname, UDP_PORT, &hints, &sender_info)) != 0)
     {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(status));
-        exit(1);
+        exit(-1);
     }
 
     // Iterate over linked-list of addrinfo structs returned by getadderinfo
@@ -67,7 +67,7 @@ int SWPSender::connect(char *hostname)
     if (inet_ntop(addr_ptr->ai_family, &((struct sockaddr_in *)addr_ptr->ai_addr)->sin_addr, recv_ip, INET6_ADDRSTRLEN) == NULL)
     {
         perror("[Sender] inet_ntop");
-        exit(1);
+        exit(-1);
     }
 
     // Set up pollfd struct
@@ -102,11 +102,16 @@ int SWPSender::connect(char *hostname)
     // Retry connection MAX_RETRY times
     for (int i = 0; i < MAX_RETRY; i++)
     {
-        if (sendto(sock_fd, vcon_packet, HEADER_SIZE, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1)
-        {
-            fprintf(stderr, "[Sender] connection attempt #%d: sendto error\n", i);
-            continue;
+        if (!error(2)) {
+            if (sendto(sock_fd, vcon_packet, HEADER_SIZE, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1)
+            {
+                fprintf(stderr, "[Sender] connection attempt #%d: sendto error\n", i);
+                continue;
+            }
+        } else {
+            fprintf(stderr, "[Sender] connection attempt #%d: packet lost\n", i);
         }
+        
 
         // Wait for response
         if (poll(pfds, 1, 1000) == -1)
@@ -166,7 +171,7 @@ int SWPSender::connect(char *hostname)
     else
     {
         fprintf(stderr, "[Sender] failed to establish virtual connection\n");
-        exit(1);
+        exit(-1);
     }
 
     fprintf(stdout, "[Sender] initial sequence number: %d\n", recv_seq_num);
@@ -180,7 +185,7 @@ int SWPSender::send_file(char *filename)
     if (access(filename, F_OK) == -1)
     {
         fprintf(stderr, "[Sender] file %s does not exist\n", filename);
-        exit(1);
+        exit(-1);
     }
 
     // Open file
@@ -188,19 +193,20 @@ int SWPSender::send_file(char *filename)
     if (fp == NULL)
     {
         fprintf(stderr, "[Sender] failed to open \"%s\"\n", filename);
-        exit(1);
+        exit(-1);
     }
 
     bool EOF_flag = false;
-    bool break_flag = false;
+    bool EOT_flag = false;
     int cur_len;
     char read_buf[MAX_DATA_SIZE];
     char recv_buf[HEADER_SIZE];
     uint32_t recv_seq_num;
     uint32_t temp_seq_num;
+    uint32_t final_seq_num;
     uint16_t temp_data_len;
 
-    while (!break_flag)
+    while (!EOT_flag)
     {
         // Check for ACKs
         if (poll(pfds, 1, 0) == -1)
@@ -262,84 +268,90 @@ int SWPSender::send_file(char *filename)
 
             // ACK received
             fprintf(stdout, "[Sender] ACK received for sequence number %d\n", recv_seq_num);
-            if (LAR < recv_seq_num) {
+            if (EOF_flag && recv_seq_num == final_seq_num)
+            {
+                fprintf(stdout, "[Sender] file transfer complete\n");
+                EOT_flag = true;
+                break;
+            }
+            if (LAR <= recv_seq_num) {
+                // Clear window
                 for (int i = LAR; i <= recv_seq_num; i++)
                 {
                     send_buf[i % WINDOW_SIZE].data_len = 0;
                     memset(send_buf[i % WINDOW_SIZE].packet, 0, MAX_PACKET_SIZE);
                 }
             } else {
+                // Clear window
                 for (int i = LAR; i <= LAR + recv_seq_num + 1; i++)
                 {
                     send_buf[i % WINDOW_SIZE].data_len = 0;
                     memset(send_buf[i % WINDOW_SIZE].packet, 0, MAX_PACKET_SIZE);
                 }
             }
+            // Update LAR and LFS
             LAR = (recv_seq_num + 1) % MAX_SEQ_NUM;
             LFS = (recv_seq_num + WINDOW_SIZE) % MAX_SEQ_NUM;
-            
-            
         }
 
         // Populate window
         for (int i = LAR + 1; i <= LAR + WINDOW_SIZE; i++)
         {
-            if (!EOF_flag && send_buf[i].data_len == 0)
+            if (!EOF_flag && send_buf[i % WINDOW_SIZE].data_len == 0)
             {
                 // Set packet sequence number
-                send_buf[i].seq_num = packet_num % MAX_SEQ_NUM;
-                packet_num++;
+                send_buf[i % WINDOW_SIZE].seq_num = packet_num % MAX_SEQ_NUM;
+                packet_num = (packet_num + 1) % MAX_SEQ_NUM;
 
                 // Read file into buffer
                 cur_len = fread(read_buf, 1, MAX_DATA_SIZE, fp);
                 if (cur_len < MAX_DATA_SIZE || cur_len == 0)
                 {
                     EOF_flag = true;
-                    // if final ack is received we can disconnect.
+                    final_seq_num = send_buf[i % WINDOW_SIZE].seq_num;
+                    fprintf(stdout, "[Sender] EOF reached final sequence num is %d\n", final_seq_num);
                 }
-                send_buf[i].data_len = (uint32_t)cur_len;
+                send_buf[i % WINDOW_SIZE].data_len = (uint32_t)cur_len;
 
                 // Set packet sequence number
-                temp_seq_num = htonl(send_buf[i].seq_num);
-                memcpy(send_buf[i].packet, &temp_seq_num, sizeof(uint32_t));
+                temp_seq_num = htonl(send_buf[i % WINDOW_SIZE].seq_num);
+                memcpy(send_buf[i % WINDOW_SIZE].packet, &temp_seq_num, sizeof(uint32_t));
 
                 // Set ACK flag to 0x00
-                send_buf[i].packet[4] = 0x00;
+                send_buf[i % WINDOW_SIZE].packet[4] = 0x00;
 
                 // Set control flag to 0x00
-                send_buf[i].packet[5] = 0x00;
+                send_buf[i % WINDOW_SIZE].packet[5] = 0x00;
 
                 // Set length of data
-                temp_data_len = htons(send_buf[i].data_len);
-                memcpy(send_buf[i].packet + 6, &temp_data_len, sizeof(uint16_t));
+                temp_data_len = htons(send_buf[i % WINDOW_SIZE].data_len);
+                memcpy(send_buf[i % WINDOW_SIZE].packet + 6, &temp_data_len, sizeof(uint16_t));
 
                 // Copy data into packet buffer
-                memcpy(send_buf[i].packet + HEADER_SIZE, read_buf, cur_len);
-                fprintf(stdout, "data: %s\n", send_buf[i].packet + HEADER_SIZE);
-            } else if (((float)(clock() - send_buf[i].timestamp))/CLOCKS_PER_SEC < 2.0) {
+                memcpy(send_buf[i % WINDOW_SIZE].packet + HEADER_SIZE, read_buf, cur_len);
+                // fprintf(stdout, "data: %s\n", send_buf[i].packet + HEADER_SIZE);
+            } else if (((float)(clock() - send_buf[i % WINDOW_SIZE].timestamp))/CLOCKS_PER_SEC < 0.5) {
                 break;
             }
 
-            if (sendto(sock_fd, send_buf[i].packet, HEADER_SIZE + send_buf[i].data_len, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1)
-            {
-                fprintf(stderr, "[Sender] failed to send packet #%d\n", send_buf[i].seq_num);
-            }
+            send_buf[i % WINDOW_SIZE].timestamp = clock();
 
-            send_buf[i].timestamp = clock();
-            fprintf(stdout, "[Sender] sent packet #%d at %f\n", send_buf[i].seq_num, (float)send_buf[i].timestamp / CLOCKS_PER_SEC);
-            
-            // REDO THIS IF STATEMENT check if buffer is completely empty
-            if (EOF_flag)
-            {
-                break;
+            if (!error(4)) {
+                if (sendto(sock_fd, send_buf[i % WINDOW_SIZE].packet, HEADER_SIZE + send_buf[i % WINDOW_SIZE].data_len, 0, addr_ptr->ai_addr, addr_ptr->ai_addrlen) == -1)
+                {
+                    fprintf(stderr, "[Sender] failed to send packet #%d\n", send_buf[i % WINDOW_SIZE].seq_num);
+                }
+                fprintf(stdout, "[Sender] sent packet #%d at %f\n", send_buf[i % WINDOW_SIZE].seq_num, (float)send_buf[i % WINDOW_SIZE].timestamp / CLOCKS_PER_SEC);
+            } else {
+                fprintf(stderr, "[Sender] packet #%d dropped\n", send_buf[i % WINDOW_SIZE].seq_num);
             }
         }
     }
 
-    return 0;
+    return final_seq_num;
 } // End_send file
 
-int SWPSender::disconnect(uint32_t final_seq_num, char *filename)
+int SWPSender::disconnect(uint32_t final_seq_num)
 {
     char disc_packet[HEADER_SIZE];
 
@@ -411,7 +423,6 @@ int SWPSender::disconnect(uint32_t final_seq_num, char *filename)
             }
 
             // Check if data length is 0x0000
-            // if ((recv_buf[6] > 0x01 && recv_buf[7]  0x00)|| recv_buf[6] != 0x00 || recv_buf[7] != 0x00) {
             if (recv_buf[6] != 0x00 || recv_buf[7] != 0x00)
             {
                 fprintf(stderr, "[Sender] disconnect attempt #%d: invalid data length\n", i);
@@ -431,11 +442,7 @@ int SWPSender::disconnect(uint32_t final_seq_num, char *filename)
     else
     {
         fprintf(stderr, "[Sender] failed to disconnect\n");
-        exit(1);
+        exit(-1);
     }
     return 0;
 } // End of disconnect
-
-// int main() {
-
-// }

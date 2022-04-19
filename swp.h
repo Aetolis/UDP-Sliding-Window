@@ -38,7 +38,7 @@ class SWPSender {
         // Public methods
         int connect(char *hostname);
         int send_file(char *filename);
-        int disconnect(uint32_t seq_num, char *filename);
+        int disconnect(uint32_t seq_num);
 
     private:
         // UDP variables
@@ -74,7 +74,6 @@ class SWPReceiver {
         // Public methods
         int setup();
         int receive_file(char *filename);
-        int disconnect();
 
     private:
         // UDP variables
@@ -99,9 +98,9 @@ class SWPReceiver {
 };
 
 // Produce an error with probability 1/chance
-// bool error(int chance)
-// {
-//     return (rand() < (RAND_MAX / chance));
-// }
+bool error(int chance)
+{
+    return (rand() < (RAND_MAX / chance));
+}
 
 

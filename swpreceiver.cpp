@@ -136,14 +136,18 @@ int SWPReceiver::setup(){
             vcon_packet[6] = 0x00;
             vcon_packet[7] = 0x00;
 
-            if (sendto(sock_fd, vcon_packet, 8, 0, (struct sockaddr *)&sender_addr, sender_addr_len) == -1) {
-                fprintf(stderr, "[Receiver] connection attempt #%d: sendto error\n", i);
-                continue;
-            }
+            if (!error(2)) {
+                if (sendto(sock_fd, vcon_packet, 8, 0, (struct sockaddr *)&sender_addr, sender_addr_len) == -1) {
+                    fprintf(stderr, "[Receiver] connection attempt #%d: sendto error\n", i);
+                    continue;
+                }
 
-            // Connection established
-            connected = true;
-            break;
+                // Connection established
+                connected = true;
+                break;
+            } else {
+                fprintf(stderr, "[Receiver] connection attempt #%d: packet lost\n", i);
+            }
         }
     }
 
@@ -175,13 +179,14 @@ int SWPReceiver::receive_file(char *filename){
     }
 
     bool EOF_flag = false;
+    bool EOT_flag = false;
     char recv_buf[MAX_PACKET_SIZE];
     char ack_buf[HEADER_SIZE];
-    // uint16_t data_len;
     uint32_t recv_seq_num;
     uint32_t ack_seq_num;
+    uint32_t final_seq_num;
 
-    while (!EOF_flag) {
+    while (!EOT_flag) {
         // Wait for data packet
         if (poll(pfds, 1, -1) == -1) {
             fprintf(stderr, "[Receiver] poll error\n");
@@ -202,8 +207,14 @@ int SWPReceiver::receive_file(char *filename){
                 continue;
             }
 
-            // Check if control flag is 0x00
-            if (recv_buf[5] != 0x00) {
+            // Check if control flag is disconnect packet
+            if (recv_buf[5] == 0x02) {
+                // Set EOF flag
+                EOF_flag = true;
+                fprintf(stdout, "[Receiver] received disconnect packet\n");
+            }
+            // Check if control flag is valid
+            else if (recv_buf[5] != 0x00) {
                 fprintf(stderr, "[Receiver] control flag invalid\n");
                 continue;
             }
@@ -211,7 +222,11 @@ int SWPReceiver::receive_file(char *filename){
             // Check if sequence number is valid
             memcpy(&recv_seq_num, recv_buf, sizeof(uint32_t));
             recv_seq_num = ntohl(recv_seq_num);
-            if (recv_seq_num > (u_int32_t)MAX_SEQ_NUM) {
+            // Set final_seq_num if EOF flag is set
+            if (EOF_flag) {
+                final_seq_num = recv_seq_num;
+                fprintf(stdout, "[Receiver] final sequence number: %d\n", final_seq_num);
+            } else if (recv_seq_num > (u_int32_t)MAX_SEQ_NUM) {
                 fprintf(stderr, "[Receiver] invalid sequence number: %d\n", recv_seq_num);
                 continue;
             } else if (NFE < LAF) {
@@ -227,31 +242,75 @@ int SWPReceiver::receive_file(char *filename){
             }
 
             // Check data length
-            if (window_buf[recv_seq_num % WINDOW_SIZE].data_len != 0) {
+            if (EOF_flag) {
+                if (recv_buf[6] != 0x00 || recv_buf[7] != 0x00) {
+                    fprintf(stderr, "[Receiver] data length invalid\n");
+                    continue;
+                }
+            } else if (window_buf[recv_seq_num % WINDOW_SIZE].data_len != 0) {
                 fprintf(stderr, "[Receiver] duplicate packet: %d\n", recv_seq_num);
                 continue;
-            }
-
-            memcpy(&window_buf[recv_seq_num % WINDOW_SIZE].data_len, recv_buf + 6, sizeof(uint16_t));
-            window_buf[recv_seq_num % WINDOW_SIZE].data_len = ntohs(window_buf[recv_seq_num % WINDOW_SIZE].data_len);
-            if (window_buf[recv_seq_num % WINDOW_SIZE].data_len >(u_int16_t)MAX_DATA_SIZE) {
-                fprintf(stderr, "[Receiver] data length invalid\n");
-                continue;
+            } else {
+                memcpy(&window_buf[recv_seq_num % WINDOW_SIZE].data_len, recv_buf + 6, sizeof(uint16_t));
+                window_buf[recv_seq_num % WINDOW_SIZE].data_len = ntohs(window_buf[recv_seq_num % WINDOW_SIZE].data_len);
+                if (window_buf[recv_seq_num % WINDOW_SIZE].data_len >(u_int16_t)MAX_DATA_SIZE) {
+                    fprintf(stderr, "[Receiver] data length invalid\n");
+                    continue;
+                }
             }
 
             // Read packet data to window buffer
-            memcpy(window_buf[recv_seq_num % WINDOW_SIZE].data, recv_buf + 8, window_buf[recv_seq_num % WINDOW_SIZE].data_len);
-            printf("[Receiver] received data packet #%d with len %d\n", recv_seq_num, window_buf[recv_seq_num % WINDOW_SIZE].data_len);
+            if (!EOF_flag) {
+                memcpy(window_buf[recv_seq_num % WINDOW_SIZE].data, recv_buf + 8, window_buf[recv_seq_num % WINDOW_SIZE].data_len);
+                printf("[Receiver] received data packet #%d with len %d\n", recv_seq_num, window_buf[recv_seq_num % WINDOW_SIZE].data_len);
+            }
         }
 
         // Determine packet to ACK
         if (window_buf[NFE % WINDOW_SIZE].data_len == 0) {
+            // Check if EOF flag is set
+            if (EOF_flag && NFE - 1 == final_seq_num) {
+                // Set sequence number
+                    ack_seq_num = htonl((uint32_t)((NFE - 1) % MAX_SEQ_NUM));
+                    memcpy(&ack_buf, &ack_seq_num, sizeof(uint32_t));
+
+                    // Set ACK flag as 0x01
+                    ack_buf[4] = 0x01;
+
+                    // Set control flag as 0x02
+                    ack_buf[5] = 0x02;
+
+                    // Set data length as 0
+                    ack_buf[6] = 0x00;
+                    ack_buf[7] = 0x00;
+
+                    if (!error(4)) {
+                        // Send ACK packet
+                        if (sendto(sock_fd, ack_buf, 8, 0, (struct sockaddr *)&sender_addr, sender_addr_len) == -1) {
+                            fprintf(stderr, "[Receiver] sendto error\n");
+                            exit(1);
+                        }
+                        fprintf(stdout, "[Receiver] ACK sent: %d\n", (NFE - 1) % MAX_SEQ_NUM);
+                    } else {
+                        fprintf(stderr, "[Sender] ACK packet #%d dropped\n", (NFE - 1) % MAX_SEQ_NUM);
+                    }
+
+                    // Update LFR and LAF
+                    NFE = NFE % MAX_SEQ_NUM;
+                    LAF = (NFE - 1 + WINDOW_SIZE) % MAX_SEQ_NUM;
+                    fprintf(stdout, "[Receiver] NFE: %d\n", NFE);
+                    fprintf(stdout, "[Receiver] LAF: %d\n", LAF);
+
+                    // Set EOT flag
+                    EOT_flag = true;
+                    break;
+            }
             fprintf(stdout, "[Receiver] no data packet to ACK: NFE %d\n", NFE);
             continue;
         } else {
             for (int i = NFE; i <= NFE + WINDOW_SIZE; i++) {
                 // Write data to file
-                fprintf(stdout, "data: %s\n", window_buf[i % WINDOW_SIZE].data);
+                // fprintf(stdout, "data: %s\n", window_buf[i % WINDOW_SIZE].data);
                 if (fwrite(window_buf[i % WINDOW_SIZE].data, sizeof(char), window_buf[i % WINDOW_SIZE].data_len, fp) != window_buf[i % WINDOW_SIZE].data_len) {
                     fprintf(stderr, "[Receiver] fwrite error\n");
                     exit(1);
@@ -280,66 +339,30 @@ int SWPReceiver::receive_file(char *filename){
                     ack_buf[7] = 0x00;
 
                     // Send ACK packet
-                    if (sendto(sock_fd, ack_buf, 8, 0, (struct sockaddr *)&sender_addr, sender_addr_len) == -1) {
-                        fprintf(stderr, "[Receiver] sendto error\n");
-                        exit(1);
+                    if (!error(4)) {
+                        if (sendto(sock_fd, ack_buf, 8, 0, (struct sockaddr *)&sender_addr, sender_addr_len) == -1) {
+                            fprintf(stderr, "[Receiver] sendto error\n");
+                            exit(1);
+                        }
+                        fprintf(stdout, "[Receiver] ACK sent: %d\n", i % MAX_SEQ_NUM);
+                    } else {
+                        fprintf(stderr, "[Sender] ACK packet #%d dropped\n", (NFE - 1) % MAX_SEQ_NUM);
                     }
-                    fprintf(stdout, "[Receiver] ACK sent: %d\n", i % MAX_SEQ_NUM);
 
                     // Update LFR and LAF
                     NFE = (i + 1) % MAX_SEQ_NUM;
                     LAF = (i + WINDOW_SIZE) % MAX_SEQ_NUM;
                     fprintf(stdout, "[Receiver] NFE: %d\n", NFE);
                     fprintf(stdout, "[Receiver] LAF: %d\n", LAF);
-
                     break;
                 }
             }
         }
-
-
-        
     }
-
-
-
-    //we need to astablish some kind of buffer that acts as a slidding frame
-
-    //I think its an endless while loop, but we might use poll
-    //we only write to the file when the window shifts, next expected
-    //we need some way of sending acks and keeping track of the frames
-
-    //
 
     // Close file
     fclose(fp);
 
     return 0;
 } // End of receive_file
-
-// int SWPReceiver::disconnect(){
-    
-
-//     printf("[Receiver] closing socket...\n");
-
-//     //close log file and socket pointer
-//     // fclose (fp);
-//     // close(sock_fd);
-
-//     return 0;
-// } // End of disconnect
-
-
-
-//read from file
-//set up own port/strucks
-//make connection
-
-//recive inital set up from server
-
-//send information
-
-//send ack
-
-//send packet
 
