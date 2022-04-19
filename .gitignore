@@ -54,3 +54,6 @@ dkms.conf
 # Test files
 sender
 receiver
+
+# Text files
+*.txt
