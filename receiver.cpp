@@ -7,5 +7,8 @@ int main (void) {
     SWPReceiver receiver;
     receiver.setup();
 
-    receiver.receive_file("test.txt");
+    char filename[9] = "test.txt";
+    receiver.receive_file(filename);
+
+    return 0;
 }
