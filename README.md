@@ -82,7 +82,47 @@ The first member method that we define is the `connect(char *hostname)` method. 
 
 The second and most important method of the `SWPSender` class is `send_file(char *filename)`. We first open the file specified by the input parameter `filename`. Again we use `poll()` to allow us to send data packets and receive ACKs at the same time. We use a while loop that continues to run until the `EOT_flag` variable is true. For each ACK we receive the validate all fields and ensure that it is valid before updating `LAR` and `LFS` accordingly. As for data packets, we populate our window with packets where ever there is space until we reach the end of the file we are sending. We do not immediately stop after reaching the end of the file because it is possible that there are still outstanding packets in our buffer. Each time we send of a data packet, we also keep track of the current time. On the next iteration if the current time exceeds the timeout time, we resend the packet.
 
+The last method that we define is `disconnect(uint32_t final_seq_num)` that is very similar to the `connect` method except that its purpose is to send and wait for a disconnect message to and from the receiver.
+
 ## SWPReceiver
-The `SWPReceiver` class is defined in the file `swpreceiver.cpp` and implements functionality for the receiver side of the Sliding Window Protocol. 
+The `SWPReceiver` class is defined in the file `swpreceiver.cpp` and implements functionality for the receiver side of the Sliding Window Protocol. This class contains 2 member functions: `setup()` and `receive_file(char *filename)`.
 
+Like we did with the `SWPSender` class, we also define a default constructor where we initialize the nessecary UDP variables, SWP variables, and the receiver side buffer.
 
+```c++
+// Constructor
+SWPReceiver::SWPReceiver() {
+    // Initialize UDP variables
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_flags = AI_PASSIVE;
+
+    sender_addr_len = sizeof(sender_addr);
+
+    // SWP variables
+    NFE = INIT_SEQ_NUM;
+    LAF = (INIT_SEQ_NUM + WINDOW_SIZE - 1) % MAX_SEQ_NUM;
+    windowSize = 0;
+
+    // Buffer variables
+    for (int i = 0; i < WINDOW_SIZE; i++)
+    {
+        window_buf[i].data_len = 0;
+    }
+}
+```
+
+Additionally, the destructor is identical to that of the one in `SWPSender` where we close the socket that we bound in `setup()`.
+
+```c++
+// Destructor
+SWPReceiver::~SWPReceiver() {
+    // Close socket
+    close(sock_fd);
+}
+```
+
+The first member method we define is the `setup()` function that does not take any parameters as input. This method binds to the port defined by `UDP_PORT` and the wildcard address of the local machine. Then it attempts to establish a virtual connection with the sender by waiting to receive a virtual connection packet via `poll()` for `MAX_RETRY` times.
+
+Next and most importantly, we define `receive_file(char *filename)` that receives the data sent by the sender and saves the information to a file specified by `filename`. We use a while loop that continues to run until the `EOT_flag` is set, which is when we receive the disconnect packet from the sender. The `poll()` function allows to both receive data packets from the sender and send ACKs at the same time. For each data packet that we receive from the sender, we validate each field of the packet for validity and decide wether the packet should be saved in the buffer or discarded if it is a duplicate. Next we determine the packet to ACK by walking through our receiver side buffer and finding the largest sequence number that is contiguous starting at `NFE`. After sending the ACK, we update the variables `LFR` and `LAF` correspondingly. When shifting the buffer, we reset the data length and use `memset` to reset the buffer. 
